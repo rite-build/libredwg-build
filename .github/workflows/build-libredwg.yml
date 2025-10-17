@@ -1,0 +1,258 @@
+name: Build LibreDWG
+
+on:
+    push:
+        branches:
+            - main
+    workflow_dispatch:
+        inputs:
+            libredwg_version:
+                description: "LibreDWG version to build (e.g., 0.13.3)"
+                required: true
+                type: string
+    schedule:
+        # Check for new LibreDWG releases daily at 2 AM UTC
+        - cron: "0 2 * * *"
+
+jobs:
+    check-new-release:
+        name: Check for new LibreDWG release
+        runs-on: ubuntu-latest
+        if: github.event_name == 'schedule'
+        outputs:
+            should_build: ${{ steps.check.outputs.should_build }}
+            latest_version: ${{ steps.check.outputs.latest_version }}
+        steps:
+            - name: Check latest LibreDWG release
+              id: check
+              run: |
+                  # Get latest release from LibreDWG/libredwg
+                  LATEST_VERSION=$(curl -s https://api.github.com/repos/LibreDWG/libredwg/releases/latest | jq -r .tag_name)
+                  echo "Latest LibreDWG version: $LATEST_VERSION"
+                  
+                  # Check if we already have this release
+                  EXISTING_RELEASE=$(curl -s https://api.github.com/repos/rite-build/dwg2dxf/releases/tags/libredwg-$LATEST_VERSION | jq -r .tag_name)
+                  
+                  if [ "$EXISTING_RELEASE" = "libredwg-$LATEST_VERSION" ]; then
+                      echo "Release already exists"
+                      echo "should_build=false" >> $GITHUB_OUTPUT
+                  else
+                      echo "New release detected: $LATEST_VERSION"
+                      echo "should_build=true" >> $GITHUB_OUTPUT
+                      echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+                  fi
+
+    build:
+        needs: [check-new-release]
+        if: |
+            always() && 
+            (github.event_name == 'workflow_dispatch' || 
+            github.event_name == 'push' ||
+            (github.event_name == 'schedule' && needs.check-new-release.outputs.should_build == 'true'))
+        name: Build LibreDWG for ${{ matrix.platform }}
+        runs-on: ${{ matrix.runner }}
+        strategy:
+            matrix:
+                include:
+                    - platform: linux-arm64
+                      runner: blacksmith-2vcpu-ubuntu-2404-arm
+                    - platform: darwin-arm64
+                      runner: macos-26
+        permissions:
+            contents: write
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Determine LibreDWG version
+              id: version
+              run: |
+                  if [ "${{ github.event_name }}" = "push" ]; then
+                      # For push events, get the latest LibreDWG release
+                      LATEST_VERSION=$(curl -s https://api.github.com/repos/LibreDWG/libredwg/releases/latest | jq -r .tag_name)
+                      echo "version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+                      echo "Building latest version: $LATEST_VERSION"
+                  elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+                      echo "version=${{ inputs.libredwg_version }}" >> $GITHUB_OUTPUT
+                      echo "Building specified version: ${{ inputs.libredwg_version }}"
+                  else
+                      echo "version=${{ needs.check-new-release.outputs.latest_version }}" >> $GITHUB_OUTPUT
+                      echo "Building scheduled version: ${{ needs.check-new-release.outputs.latest_version }}"
+                  fi
+
+            - name: Install build dependencies (Linux)
+              if: matrix.platform == 'linux-arm64'
+              run: |
+                  sudo apt-get update -qq
+                  sudo apt-get install -y -qq \
+                    build-essential \
+                    git \
+                    autoconf \
+                    automake \
+                    libtool \
+                    texinfo \
+                    pkg-config \
+                    libxml2-dev \
+                    libpcre2-dev \
+                    libiconv-hook-dev
+
+            - name: Install build dependencies (macOS)
+              if: matrix.platform == 'darwin-arm64'
+              run: |
+                  brew install autoconf automake libtool texinfo libiconv
+
+            - name: Clone LibreDWG
+              run: |
+                  VERSION=${{ steps.version.outputs.version }}
+                  git clone --depth 1 --branch $VERSION \
+                    https://github.com/LibreDWG/libredwg.git libredwg
+
+            - name: Build libiconv (Linux)
+              if: matrix.platform == 'linux-arm64'
+              run: |
+                  # Build libiconv statically to bundle it
+                  wget https://ftp.gnu.org/pub/gnu/libiconv/libiconv-1.17.tar.gz
+                  tar xzf libiconv-1.17.tar.gz
+                  cd libiconv-1.17
+                  ./configure --prefix=${{ github.workspace }}/libiconv-install --enable-static --disable-shared
+                  make -j$(nproc)
+                  make install
+
+            - name: Build LibreDWG (Linux)
+              if: matrix.platform == 'linux-arm64'
+              working-directory: libredwg
+              run: |
+                  ./autogen.sh
+                  export LDFLAGS="-L${{ github.workspace }}/libiconv-install/lib"
+                  export CPPFLAGS="-I${{ github.workspace }}/libiconv-install/include"
+                  ./configure \
+                    --prefix=/usr/local \
+                    --disable-bindings \
+                    --disable-write \
+                    --disable-json \
+                    --disable-python \
+                    --with-libiconv-prefix=${{ github.workspace }}/libiconv-install \
+                    --enable-static=yes \
+                    --disable-shared
+                  make -j$(nproc)
+
+            - name: Build LibreDWG (macOS)
+              if: matrix.platform == 'darwin-arm64'
+              working-directory: libredwg
+              run: |
+                  ./autogen.sh
+                  BREW_PREFIX=$(brew --prefix)
+                  ICONV_PREFIX="$BREW_PREFIX/opt/libiconv"
+                  export LDFLAGS="-L$ICONV_PREFIX/lib"
+                  export CPPFLAGS="-I$ICONV_PREFIX/include"
+                  export LIBS="-liconv"
+                  ./configure \
+                    --prefix=/usr/local \
+                    --disable-bindings \
+                    --disable-write \
+                    --disable-json \
+                    --disable-python \
+                    --with-libiconv-prefix="$ICONV_PREFIX" \
+                    --enable-static=yes \
+                    --disable-shared
+                  make -j$(sysctl -n hw.ncpu)
+
+            - name: Install LibreDWG
+              working-directory: libredwg
+              run: |
+                  make install DESTDIR=${{ github.workspace }}/install-root
+
+            - name: Create artifact
+              run: |
+                  mkdir -p artifacts/${{ matrix.platform }}/bin
+                  mkdir -p artifacts/${{ matrix.platform }}/lib
+                  mkdir -p artifacts/${{ matrix.platform }}/share
+                  
+                  # Copy all executables (dwg2dxf, dwgread, dwg2SVG, etc.)
+                  cp -r install-root/usr/local/bin/* artifacts/${{ matrix.platform }}/bin/ || true
+                  
+                  # Copy static libraries
+                  cp -r install-root/usr/local/lib/*.a artifacts/${{ matrix.platform }}/lib/ 2>/dev/null || true
+                  
+                  # Copy shared data files if they exist
+                  cp -r install-root/usr/local/share/libredwg artifacts/${{ matrix.platform }}/share/ 2>/dev/null || true
+                  
+                  # Verify binaries are self-contained
+                  echo "=== Checking binary dependencies ==="
+                  for bin in artifacts/${{ matrix.platform }}/bin/*; do
+                      if [ -f "$bin" ] && [ -x "$bin" ]; then
+                          echo "Checking $bin:"
+                          if [[ "${{ matrix.platform }}" == darwin-* ]]; then
+                              otool -L "$bin" || true
+                          else
+                              ldd "$bin" || true
+                          fi
+                      fi
+                  done
+                  
+                  # Create a README with usage instructions
+                  cat > artifacts/${{ matrix.platform }}/README.md << 'EOF'
+                  # LibreDWG Binaries
+                  
+                  This archive contains prebuilt LibreDWG binaries and libraries.
+                  
+                  ## Contents
+                  - `bin/`: All executable programs (dwg2dxf, dwgread, dwg2SVG, etc.)
+                  - `lib/`: Required libraries
+                  - `share/`: Shared data files
+                  
+                  ## Usage
+                  
+                  These binaries are statically linked and self-contained. Simply extract and use:
+                  
+                  ```bash
+                  tar -xzf libredwg-${{ matrix.platform }}.tar.gz
+                  export PATH="$PWD/${{ matrix.platform }}/bin:$PATH"
+                  ```
+                  
+                  Or install system-wide:
+                  
+                  ```bash
+                  sudo cp -r ${{ matrix.platform }}/bin/* /usr/local/bin/
+                  sudo cp -r ${{ matrix.platform }}/lib/* /usr/local/lib/
+                  sudo cp -r ${{ matrix.platform }}/share/* /usr/local/share/
+                  ```
+                  
+                  ## Available Programs
+                  - `dwg2dxf`: Convert DWG files to DXF format
+                  - `dwgread`: Read and display DWG file information
+                  - `dwg2SVG`: Convert DWG files to SVG format
+                  - And more...
+                  
+                  Run any program with `--help` or `--version` for more information.
+                  EOF
+                  
+                  # List what we're packaging
+                  echo "=== Artifact contents ==="
+                  find artifacts/${{ matrix.platform }} -type f
+                  
+                  # Create the tarball
+                  cd artifacts
+                  tar -czf ../libredwg-${{ matrix.platform }}.tar.gz ${{ matrix.platform }}
+
+            - name: Upload artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: libredwg-${{ matrix.platform }}
+                  path: libredwg-${{ matrix.platform }}.tar.gz
+                  retention-days: 90
+
+            - name: Upload to Release
+              uses: softprops/action-gh-release@v1
+              with:
+                  tag_name: libredwg-${{ steps.version.outputs.version }}
+                  name: LibreDWG ${{ steps.version.outputs.version }}
+                  body: |
+                      Prebuilt LibreDWG binaries for macOS ARM64 and Linux ARM64.
+                      
+                      **These binaries are statically linked and fully self-contained - no external dependencies required!**
+                      
+                      Upstream release: https://github.com/LibreDWG/libredwg/releases/tag/${{ steps.version.outputs.version }}
+                  files: libredwg-${{ matrix.platform }}.tar.gz
+                  draft: false
+                  prerelease: false
