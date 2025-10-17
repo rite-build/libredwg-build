@@ -1,0 +1,17 @@
+# Build artifacts
+artifacts/
+install-root/
+libredwg/
+libiconv-*/
+
+# Tarballs
+*.tar.gz
+
+# Temporary
+*.tmp
+*.log
+test-*/
+
+# System
+.DS_Store
+*~

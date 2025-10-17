@@ -177,8 +177,8 @@ jobs:
                   # Copy shared data files if they exist
                   cp -r install-root/usr/local/share/libredwg artifacts/${{ matrix.platform }}/share/ 2>/dev/null || true
                   
-                  # Verify binaries are self-contained
-                  echo "=== Checking binary dependencies ==="
+                  # Check initial binary dependencies (before fixing)
+                  echo "=== Initial binary dependencies (before fixing) ==="
                   for bin in artifacts/${{ matrix.platform }}/bin/*; do
                       if [ -f "$bin" ] && [ -x "$bin" ]; then
                           echo "Checking $bin:"
@@ -189,42 +189,42 @@ jobs:
                           fi
                       fi
                   done
+
+            - name: Fix binary dependencies
+              run: |
+                  # Run the appropriate fix script based on platform
+                  if [[ "${{ matrix.platform }}" == darwin-* ]]; then
+                      ./scripts/fix-macos-dependencies.sh "artifacts/${{ matrix.platform }}"
+                  else
+                      ./scripts/fix-linux-dependencies.sh "artifacts/${{ matrix.platform }}"
+                  fi
                   
                   # Create a README with usage instructions
                   cat > artifacts/${{ matrix.platform }}/README.md << 'EOF'
                   # LibreDWG Binaries
                   
-                  This archive contains prebuilt LibreDWG binaries and libraries.
-                  
-                  ## Contents
-                  - `bin/`: All executable programs (dwg2dxf, dwgread, dwg2SVG, etc.)
-                  - `lib/`: Required libraries
-                  - `share/`: Shared data files
+                  Prebuilt LibreDWG binaries with bundled dependencies.
                   
                   ## Usage
                   
-                  These binaries are statically linked and self-contained. Simply extract and use:
-                  
                   ```bash
                   tar -xzf libredwg-${{ matrix.platform }}.tar.gz
-                  export PATH="$PWD/${{ matrix.platform }}/bin:$PATH"
+                  ./${{ matrix.platform }}/bin/dwg2dxf input.dwg -o output.dxf
                   ```
                   
-                  Or install system-wide:
+                  ## Contents
                   
-                  ```bash
-                  sudo cp -r ${{ matrix.platform }}/bin/* /usr/local/bin/
-                  sudo cp -r ${{ matrix.platform }}/lib/* /usr/local/lib/
-                  sudo cp -r ${{ matrix.platform }}/share/* /usr/local/share/
-                  ```
+                  - `bin/`: Executables (dwg2dxf, dwgread, dwg2SVG, etc.)
+                  - `lib/`: Bundled libraries (libiconv, etc.)
+                  - `share/`: Data files
                   
-                  ## Available Programs
-                  - `dwg2dxf`: Convert DWG files to DXF format
-                  - `dwgread`: Read and display DWG file information
-                  - `dwg2SVG`: Convert DWG files to SVG format
-                  - And more...
+                  ## Technical Details
                   
-                  Run any program with `--help` or `--version` for more information.
+                  Dependencies bundled in `lib/` using relative paths:
+                  - macOS: `@loader_path/../lib/`
+                  - Linux: `$ORIGIN/../lib`
+                  
+                  No external dependencies required (except system libraries).
                   EOF
                   
                   # List what we're packaging
@@ -234,6 +234,65 @@ jobs:
                   # Create the tarball
                   cd artifacts
                   tar -czf ../libredwg-${{ matrix.platform }}.tar.gz ${{ matrix.platform }}
+
+            - name: Test portability in clean environment
+              run: |
+                  # Create a clean test directory
+                  mkdir -p /tmp/test-portable-dwg2dxf-$$
+                  cd /tmp/test-portable-dwg2dxf-$$
+                  
+                  # Extract the tarball
+                  tar -xzf ${{ github.workspace }}/libredwg-${{ matrix.platform }}.tar.gz
+                  
+                  # Test that binaries work
+                  echo "=== Testing binaries in clean environment ==="
+                  for bin in ${{ matrix.platform }}/bin/*; do
+                      if [ -f "$bin" ] && [ -x "$bin" ]; then
+                          echo "Testing $(basename "$bin")..."
+                          if "$bin" --version 2>&1 | head -5; then
+                              echo "✅ $(basename "$bin") works!"
+                          else
+                              echo "Testing with --help..."
+                              if "$bin" --help 2>&1 | head -5; then
+                                  echo "✅ $(basename "$bin") works!"
+                              else
+                                  echo "❌ $(basename "$bin") failed"
+                                  exit 1
+                              fi
+                          fi
+                          echo ""
+                      fi
+                  done
+                  
+                  # Verify no external dependencies
+                  echo "=== Final dependency check ==="
+                  for bin in ${{ matrix.platform }}/bin/*; do
+                      if [ -f "$bin" ] && [ -x "$bin" ]; then
+                          echo "Dependencies for $(basename "$bin"):"
+                          if [[ "${{ matrix.platform }}" == darwin-* ]]; then
+                              otool -L "$bin"
+                              # Check for any Homebrew or non-system paths
+                              if otool -L "$bin" | grep -E "(homebrew|/opt/)" | grep -v "@loader_path"; then
+                                  echo "❌ ERROR: Found hardcoded external dependency"
+                                  exit 1
+                              fi
+                          else
+                              ldd "$bin"
+                              # Check for missing libraries
+                              if ldd "$bin" 2>&1 | grep -q "not found"; then
+                                  echo "❌ ERROR: Missing library dependency"
+                                  exit 1
+                              fi
+                          fi
+                          echo ""
+                      fi
+                  done
+                  
+                  echo "✅ All portability tests passed!"
+                  
+                  # Cleanup
+                  cd ${{ github.workspace }}
+                  rm -rf /tmp/test-portable-dwg2dxf-$$
 
             - name: Upload artifact
               uses: actions/upload-artifact@v4
@@ -248,11 +307,17 @@ jobs:
                   tag_name: libredwg-${{ steps.version.outputs.version }}
                   name: LibreDWG ${{ steps.version.outputs.version }}
                   body: |
-                      Prebuilt LibreDWG binaries for macOS ARM64 and Linux ARM64.
+                      Prebuilt LibreDWG binaries for ARM64 (macOS and Linux).
                       
-                      **These binaries are statically linked and fully self-contained - no external dependencies required!**
+                      Dependencies bundled using `@loader_path` (macOS) / `$ORIGIN` (Linux).
                       
-                      Upstream release: https://github.com/LibreDWG/libredwg/releases/tag/${{ steps.version.outputs.version }}
+                      Usage:
+                      ```bash
+                      tar -xzf libredwg-darwin-arm64.tar.gz
+                      ./darwin-arm64/bin/dwg2dxf input.dwg -o output.dxf
+                      ```
+                      
+                      Upstream: https://github.com/LibreDWG/libredwg/releases/tag/${{ steps.version.outputs.version }}
                   files: libredwg-${{ matrix.platform }}.tar.gz
                   draft: false
                   prerelease: false
