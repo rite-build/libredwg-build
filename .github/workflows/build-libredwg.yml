@@ -4,51 +4,12 @@ on:
     push:
         branches:
             - main
-    workflow_dispatch:
-        inputs:
-            libredwg_version:
-                description: "LibreDWG version to build (e.g., 0.13.3)"
-                required: true
-                type: string
-    schedule:
-        # Check for new LibreDWG releases daily at 2 AM UTC
-        - cron: "0 2 * * *"
+
+env:
+    LIBREDWG_VERSION: "0.13.3"
 
 jobs:
-    check-new-release:
-        name: Check for new LibreDWG release
-        runs-on: ubuntu-latest
-        if: github.event_name == 'schedule'
-        outputs:
-            should_build: ${{ steps.check.outputs.should_build }}
-            latest_version: ${{ steps.check.outputs.latest_version }}
-        steps:
-            - name: Check latest LibreDWG release
-              id: check
-              run: |
-                  # Get latest release from LibreDWG/libredwg
-                  LATEST_VERSION=$(curl -s https://api.github.com/repos/LibreDWG/libredwg/releases/latest | jq -r .tag_name)
-                  echo "Latest LibreDWG version: $LATEST_VERSION"
-                  
-                  # Check if we already have this release
-                  EXISTING_RELEASE=$(curl -s https://api.github.com/repos/rite-build/dwg2dxf/releases/tags/libredwg-$LATEST_VERSION | jq -r .tag_name)
-                  
-                  if [ "$EXISTING_RELEASE" = "libredwg-$LATEST_VERSION" ]; then
-                      echo "Release already exists"
-                      echo "should_build=false" >> $GITHUB_OUTPUT
-                  else
-                      echo "New release detected: $LATEST_VERSION"
-                      echo "should_build=true" >> $GITHUB_OUTPUT
-                      echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
-                  fi
-
     build:
-        needs: [check-new-release]
-        if: |
-            always() && 
-            (github.event_name == 'workflow_dispatch' || 
-            github.event_name == 'push' ||
-            (github.event_name == 'schedule' && needs.check-new-release.outputs.should_build == 'true'))
         name: Build LibreDWG for ${{ matrix.platform }}
         runs-on: ${{ matrix.runner }}
         strategy:
@@ -64,21 +25,11 @@ jobs:
             - name: Checkout code
               uses: actions/checkout@v4
 
-            - name: Determine LibreDWG version
+            - name: Set LibreDWG version
               id: version
               run: |
-                  if [ "${{ github.event_name }}" = "push" ]; then
-                      # For push events, get the latest LibreDWG release
-                      LATEST_VERSION=$(curl -s https://api.github.com/repos/LibreDWG/libredwg/releases/latest | jq -r .tag_name)
-                      echo "version=$LATEST_VERSION" >> $GITHUB_OUTPUT
-                      echo "Building latest version: $LATEST_VERSION"
-                  elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-                      echo "version=${{ inputs.libredwg_version }}" >> $GITHUB_OUTPUT
-                      echo "Building specified version: ${{ inputs.libredwg_version }}"
-                  else
-                      echo "version=${{ needs.check-new-release.outputs.latest_version }}" >> $GITHUB_OUTPUT
-                      echo "Building scheduled version: ${{ needs.check-new-release.outputs.latest_version }}"
-                  fi
+                  echo "version=${{ env.LIBREDWG_VERSION }}" >> $GITHUB_OUTPUT
+                  echo "Building version: ${{ env.LIBREDWG_VERSION }}"
 
             - name: Install build dependencies (Linux)
               if: matrix.platform == 'linux-arm64'
