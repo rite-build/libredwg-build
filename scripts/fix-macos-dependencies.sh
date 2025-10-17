@@ -2,7 +2,7 @@
 set -e
 
 # Script to fix macOS binary dependencies by bundling required libraries
-# and updating install names to use @loader_path
+# and updating install names to use @executable_path for binaries and @loader_path for libraries
 
 ARTIFACT_DIR="$1"
 
@@ -73,9 +73,9 @@ fix_binary() {
             # Copy the library if not already present
             copy_library "$lib_path"
             
-            # Update the binary to use @loader_path
-            echo "  Updating reference: $lib_path -> @loader_path/../lib/$lib_name"
-            install_name_tool -change "$lib_path" "@loader_path/../lib/$lib_name" "$binary_path"
+            # Update the binary to use @executable_path
+            echo "  Updating reference: $lib_path -> @executable_path/../lib/$lib_name"
+            install_name_tool -change "$lib_path" "@executable_path/../lib/$lib_name" "$binary_path"
         fi
     done
     
@@ -159,7 +159,7 @@ for binary in "$BIN_DIR"/*; do
             echo ""
             
             # Check for any Homebrew or non-system paths
-            if otool -L "$binary" | grep -E "(homebrew|/opt/|/usr/local)" | grep -v "@loader_path"; then
+            if otool -L "$binary" | grep -E "(homebrew|/opt/|/usr/local)" | grep -v "@executable_path"; then
                 echo "❌ WARNING: Found external dependency in $(basename "$binary")"
                 ALL_GOOD=false
             fi
@@ -198,5 +198,5 @@ echo ""
 echo "=== Summary ==="
 echo "Binaries fixed: $(find "$BIN_DIR" -type f -perm +111 | wc -l | tr -d ' ')"
 echo "Libraries bundled: $(find "$LIB_DIR" -type f -name '*.dylib' ! -type l 2>/dev/null | wc -l | tr -d ' ')"
-echo "All dependencies are now relative using @loader_path"
+echo "All dependencies are now relative using @executable_path for binaries and @loader_path for libraries"
 

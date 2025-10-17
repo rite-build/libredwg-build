@@ -13,7 +13,7 @@ This broke portability in Docker containers and systems without Homebrew.
 ## Solution
 
 Bundle all dependencies and use relative paths:
-- **macOS**: `@loader_path/../lib/` for library loading
+- **macOS**: `@executable_path/../lib/` for binaries, `@loader_path/` for library-to-library dependencies
 - **Linux**: `$ORIGIN/../lib/` with patchelf rpath
 
 ## How It Works
@@ -51,7 +51,7 @@ tar -xzf libredwg-darwin-arm64.tar.gz
 **macOS** - Check dependencies:
 ```bash
 otool -L darwin-arm64/bin/dwg2dxf
-# Should show: @loader_path/../lib/libiconv.2.dylib ✅
+# Should show: @executable_path/../lib/libiconv.2.dylib ✅
 ```
 
 **Linux** - Check dependencies:
@@ -74,15 +74,16 @@ scripts/test-tarball.sh               # Portability verification
 ### Directory Structure
 ```
 darwin-arm64/
-├── bin/dwg2dxf              # Uses @loader_path/../lib/
-├── lib/libiconv.2.dylib     # Bundled dependency
+├── bin/dwg2dxf              # Uses @executable_path/../lib/
+├── lib/libiconv.2.dylib     # Bundled dependency (uses @loader_path/)
 └── share/libredwg/          # Data files
 ```
 
 ### macOS: install_name_tool + codesign
 - Scans binaries with `otool -L`
 - Copies libraries to `lib/`
-- Changes paths to `@loader_path/../lib/`
+- Changes binary paths to `@executable_path/../lib/`
+- Changes library-to-library paths to `@loader_path/`
 - Re-signs all binaries/libraries (fixes invalid signatures after modification)
 
 ### Linux: patchelf
