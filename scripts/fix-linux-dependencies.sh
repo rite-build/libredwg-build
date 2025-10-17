@@ -124,6 +124,35 @@ fix_binary() {
     done
 }
 
+# First, fix any shared libraries that are already in lib/ (e.g., libredwg.so)
+if [ -d "$LIB_DIR" ]; then
+    for lib in "$LIB_DIR"/*.so*; do
+        if [ -f "$lib" ] && [ ! -L "$lib" ]; then
+            lib_name=$(basename "$lib")
+            echo "Fixing library $lib_name..."
+            
+            # Set rpath for the library itself
+            patchelf --set-rpath '$ORIGIN' "$lib" 2>/dev/null || true
+            
+            # Check dependencies and copy them
+            ldd "$lib" 2>/dev/null | grep "=>" | while read -r line; do
+                dep_name=$(echo "$line" | awk '{print $1}')
+                dep_path=$(echo "$line" | awk '{print $3}')
+                
+                if [ -n "$dep_path" ] && [ -f "$dep_path" ]; then
+                    # Skip common system libraries
+                    if echo "$dep_path" | grep -qE "^/(lib|usr/lib)/(ld-linux|libc\.|libm\.|libpthread\.|libdl\.|librt\.|libgcc|libstdc)"; then
+                        continue
+                    fi
+                    
+                    echo "  Found dependency: $dep_name -> $dep_path"
+                    copy_library "$dep_path"
+                fi
+            done
+        fi
+    done
+fi
+
 # Process all executables in the bin directory
 if [ -d "$BIN_DIR" ]; then
     for binary in "$BIN_DIR"/*; do

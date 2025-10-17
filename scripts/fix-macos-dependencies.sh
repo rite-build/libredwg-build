@@ -64,8 +64,13 @@ fix_binary() {
     echo "Fixing $binary_name..."
     
     # Get all non-system dependencies
-    otool -L "$binary_path" | grep -v ":" | grep -v "@loader_path" | grep -v "/usr/lib" | grep -v "/System/" | while read -r line; do
+    otool -L "$binary_path" | grep -v ":" | grep -v "@executable_path" | grep -v "@loader_path" | grep -v "/usr/lib" | grep -v "/System/" | while read -r line; do
         lib_path=$(echo "$line" | awk '{print $1}')
+        
+        # Skip if it's the binary itself
+        if [ "$lib_path" = "$binary_path" ]; then
+            continue
+        fi
         
         if [ -f "$lib_path" ]; then
             lib_name=$(basename "$lib_path")
@@ -74,8 +79,8 @@ fix_binary() {
             copy_library "$lib_path"
             
             # Update the binary to use @executable_path
-            echo "  Updating reference: $lib_path -> @executable_path/lib/$lib_name"
-            install_name_tool -change "$lib_path" "@executable_path/lib/$lib_name" "$binary_path"
+            echo "  Updating reference: $lib_path -> @executable_path/../lib/$lib_name"
+            install_name_tool -change "$lib_path" "@executable_path/../lib/$lib_name" "$binary_path"
         fi
     done
     
@@ -96,6 +101,38 @@ fix_binary() {
     # Re-sign the binary after all install_name_tool modifications
     codesign --force --sign - "$binary_path" 2>/dev/null || true
 }
+
+# First, fix any shared libraries that are already in lib/ (e.g., libredwg.dylib)
+if [ -d "$LIB_DIR" ]; then
+    for lib in "$LIB_DIR"/*.dylib; do
+        if [ -f "$lib" ] && [ ! -L "$lib" ]; then
+            lib_name=$(basename "$lib")
+            echo "Fixing library $lib_name..."
+            
+            # Set the library's install name to use @loader_path
+            install_name_tool -id "@loader_path/$lib_name" "$lib"
+            
+            # Fix dependencies in the library
+            otool -L "$lib" | grep -v ":" | grep -v "@loader_path" | grep -v "/usr/lib" | grep -v "/System/" | while read -r line; do
+                dep_path=$(echo "$line" | awk '{print $1}')
+                
+                if [ -f "$dep_path" ]; then
+                    dep_name=$(basename "$dep_path")
+                    
+                    # Copy the dependency if not already present
+                    copy_library "$dep_path"
+                    
+                    # Update the library to use @loader_path
+                    echo "  Updating reference in $lib_name: $dep_path -> @loader_path/$dep_name"
+                    install_name_tool -change "$dep_path" "@loader_path/$dep_name" "$lib"
+                fi
+            done
+            
+            # Re-sign the library
+            codesign --force --sign - "$lib" 2>/dev/null || true
+        fi
+    done
+fi
 
 # Process all executables in the bin directory
 if [ -d "$BIN_DIR" ]; then

@@ -4,25 +4,20 @@ Automated build pipeline for creating truly portable LibreDWG binaries for ARM64
 
 ## Problem
 
-The binaries had hardcoded dependencies on external libraries:
-- **macOS**: `/opt/homebrew/opt/libiconv/lib/libiconv.2.dylib` 
-- **Linux**: Missing libraries on minimal distributions
-
-This broke portability in Docker containers and systems without Homebrew.
+1. **Hardcoded dependencies** broke portability (Homebrew paths, missing libs)
+2. **`--disable-write` caused corrupted DXF output** (files smaller than expected)
 
 ## Solution
 
-Bundle all dependencies and use relative paths:
-- **macOS**: `@executable_path/lib/` for binaries, `@loader_path/` for library-to-library dependencies
-- **Linux**: `$ORIGIN/../lib/` with patchelf rpath
+1. **Enable write support** (removed `--disable-write` and `--disable-json`)
+2. **Bundle dependencies** with relative paths (`@executable_path/../lib/`, `$ORIGIN/../lib`)
 
 ## How It Works
 
-1. Build LibreDWG with dependencies
-2. Run `scripts/fix-*-dependencies.sh` to bundle libraries
-3. Update binary paths to use relative loading
-4. Verify in clean environment
-5. Create portable tarball
+1. Build LibreDWG with write/JSON enabled + static/shared libs
+2. Bundle all dependencies with `scripts/fix-*-dependencies.sh`
+3. Update paths to relative loading
+4. Verify and create portable tarball
 
 ## Usage
 
@@ -74,22 +69,32 @@ scripts/test-tarball.sh               # Portability verification
 ### Directory Structure
 ```
 darwin-arm64/
-├── bin/dwg2dxf              # Uses @executable_path/lib/
-├── lib/libiconv.2.dylib     # Bundled dependency (uses @loader_path/)
+├── bin/dwg2dxf              # Uses @executable_path/../lib/
+├── lib/
+│   ├── libredwg.0.dylib     # LibreDWG shared library (uses @loader_path/)
+│   ├── libiconv.2.dylib     # Bundled iconv dependency (uses @loader_path/)
+│   └── *.a                  # Static libraries
 └── share/libredwg/          # Data files
 ```
 
 ### macOS: install_name_tool + codesign
-- Scans binaries with `otool -L`
-- Copies libraries to `lib/`
-- Changes binary paths to `@executable_path/lib/`
+- Scans binaries and shared libraries with `otool -L`
+- Copies all dependencies (iconv, LibreDWG's own libs) to `lib/`
+- Changes binary paths to `@executable_path/../lib/`
 - Changes library-to-library paths to `@loader_path/`
 - Re-signs all binaries/libraries (fixes invalid signatures after modification)
 
 ### Linux: patchelf
-- Scans binaries with `ldd`
-- Copies libraries to `lib/`
-- Sets rpath to `$ORIGIN/../lib`
+- Scans binaries and shared libraries with `ldd`
+- Copies all dependencies (iconv, LibreDWG's own libs) to `lib/`
+- Sets rpath to `$ORIGIN/../lib` for binaries
+- Sets rpath to `$ORIGIN` for libraries
+
+## Build Configuration
+
+- ✅ Write/JSON support enabled (fixes corrupted output)
+- ✅ Static + shared libraries
+- ❌ Python/language bindings disabled
 
 ## Troubleshooting
 

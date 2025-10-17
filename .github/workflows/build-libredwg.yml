@@ -79,12 +79,10 @@ jobs:
                   ./configure \
                     --prefix=/usr/local \
                     --disable-bindings \
-                    --disable-write \
-                    --disable-json \
                     --disable-python \
                     --with-libiconv-prefix=${{ github.workspace }}/libiconv-install \
                     --enable-static=yes \
-                    --disable-shared
+                    --enable-shared
                   make -j$(nproc)
 
             - name: Build LibreDWG (macOS)
@@ -100,12 +98,10 @@ jobs:
                   ./configure \
                     --prefix=/usr/local \
                     --disable-bindings \
-                    --disable-write \
-                    --disable-json \
                     --disable-python \
                     --with-libiconv-prefix="$ICONV_PREFIX" \
                     --enable-static=yes \
-                    --disable-shared
+                    --enable-shared
                   make -j$(sysctl -n hw.ncpu)
 
             - name: Install LibreDWG
@@ -124,6 +120,10 @@ jobs:
                   
                   # Copy static libraries
                   cp -r install-root/usr/local/lib/*.a artifacts/${{ matrix.platform }}/lib/ 2>/dev/null || true
+                  
+                  # Copy shared libraries
+                  cp -r install-root/usr/local/lib/*.so* artifacts/${{ matrix.platform }}/lib/ 2>/dev/null || true
+                  cp -r install-root/usr/local/lib/*.dylib* artifacts/${{ matrix.platform }}/lib/ 2>/dev/null || true
                   
                   # Copy shared data files if they exist
                   cp -r install-root/usr/local/share/libredwg artifacts/${{ matrix.platform }}/share/ 2>/dev/null || true
