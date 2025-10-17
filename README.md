@@ -79,10 +79,11 @@ darwin-arm64/
 └── share/libredwg/          # Data files
 ```
 
-### macOS: install_name_tool
+### macOS: install_name_tool + codesign
 - Scans binaries with `otool -L`
 - Copies libraries to `lib/`
 - Changes paths to `@loader_path/../lib/`
+- Re-signs all binaries/libraries (fixes invalid signatures after modification)
 
 ### Linux: patchelf
 - Scans binaries with `ldd`
@@ -94,6 +95,15 @@ darwin-arm64/
 **"Library not found" error**: Run the fix script manually
 ```bash
 ./scripts/fix-macos-dependencies.sh artifacts/darwin-arm64
+```
+
+**Invalid code signature (macOS)**: After modifying binaries with `install_name_tool`, they must be re-signed
+```bash
+# Check signature
+codesign --verify --verbose darwin-arm64/lib/libiconv.2.dylib
+
+# Re-sign if needed
+codesign --force --sign - darwin-arm64/lib/libiconv.2.dylib
 ```
 
 **Test in Docker** (Linux):

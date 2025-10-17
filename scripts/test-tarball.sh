@@ -38,11 +38,21 @@ for bin in $BINARIES; do
     
     if [ "$PLATFORM_TYPE" = "darwin" ]; then
         if ! file "$bin" | grep -q "Mach-O"; then continue; fi
+        
+        # Check dependencies
         if otool -L "$bin" | grep -E "(homebrew|/opt/)" | grep -v "@loader_path" | grep -v ":"; then
             echo "❌ $bin_name: Hardcoded external dependency found"
             FAIL_COUNT=$((FAIL_COUNT + 1))
         else
             echo "✅ $bin_name: Dependencies OK"
+        fi
+        
+        # Check code signature
+        if codesign --verify --verbose "$bin" 2>&1; then
+            echo "✅ $bin_name: Code signature valid"
+        else
+            echo "❌ $bin_name: Invalid code signature"
+            FAIL_COUNT=$((FAIL_COUNT + 1))
         fi
     else
         if ! file "$bin" | grep -q "ELF"; then continue; fi
@@ -59,6 +69,28 @@ for bin in $BINARIES; do
         echo "✅ $bin_name: Execution OK"
     fi
 done
+
+# Check bundled libraries
+if [ -d "$PLATFORM_DIR/lib" ]; then
+    echo ""
+    echo "Checking bundled libraries..."
+    
+    if [ "$PLATFORM_TYPE" = "darwin" ]; then
+        for lib in "$PLATFORM_DIR/lib"/*.dylib; do
+            if [ -f "$lib" ] && [ ! -L "$lib" ]; then
+                lib_name=$(basename "$lib")
+                
+                # Check code signature
+                if codesign --verify --verbose "$lib" 2>&1; then
+                    echo "✅ $lib_name: Code signature valid"
+                else
+                    echo "❌ $lib_name: Invalid code signature"
+                    FAIL_COUNT=$((FAIL_COUNT + 1))
+                fi
+            fi
+        done
+    fi
+fi
 
 if [ $FAIL_COUNT -gt 0 ]; then
     echo ""

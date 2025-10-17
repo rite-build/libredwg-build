@@ -50,6 +50,9 @@ copy_library() {
                 install_name_tool -change "$dep" "@loader_path/$dep_name" "$target_path" 2>/dev/null || true
             fi
         done
+        
+        # Re-sign the library after all install_name_tool modifications
+        codesign --force --sign - "$target_path" 2>/dev/null || true
     fi
 }
 
@@ -89,6 +92,9 @@ fix_binary() {
             fi
         fi
     done
+    
+    # Re-sign the binary after all install_name_tool modifications
+    codesign --force --sign - "$binary_path" 2>/dev/null || true
 }
 
 # Process all executables in the bin directory
@@ -103,6 +109,40 @@ if [ -d "$BIN_DIR" ]; then
     done
 else
     echo "Warning: No bin directory found in $ARTIFACT_DIR"
+fi
+
+echo ""
+echo "=== Verifying Code Signatures ==="
+
+# Verify signatures of all binaries and libraries
+SIGNATURE_GOOD=true
+
+if [ -d "$LIB_DIR" ] && [ "$(ls -A $LIB_DIR 2>/dev/null)" ]; then
+    for dylib in "$LIB_DIR"/*.dylib; do
+        if [ -f "$dylib" ] && [ ! -L "$dylib" ]; then
+            if ! codesign --verify "$dylib" 2>/dev/null; then
+                echo "⚠️  $(basename "$dylib"): signature verification failed"
+                SIGNATURE_GOOD=false
+            fi
+        fi
+    done
+fi
+
+if [ -d "$BIN_DIR" ]; then
+    for binary in "$BIN_DIR"/*; do
+        if [ -f "$binary" ] && [ -x "$binary" ]; then
+            if file "$binary" | grep -q "Mach-O"; then
+                if ! codesign --verify "$binary" 2>/dev/null; then
+                    echo "⚠️  $(basename "$binary"): signature verification failed"
+                    SIGNATURE_GOOD=false
+                fi
+            fi
+        fi
+    done
+fi
+
+if [ "$SIGNATURE_GOOD" = true ]; then
+    echo "✅ All code signatures valid"
 fi
 
 echo ""
