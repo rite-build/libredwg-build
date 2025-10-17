@@ -74,8 +74,8 @@ fix_binary() {
             copy_library "$lib_path"
             
             # Update the binary to use @executable_path
-            echo "  Updating reference: $lib_path -> @executable_path/../lib/$lib_name"
-            install_name_tool -change "$lib_path" "@executable_path/../lib/$lib_name" "$binary_path"
+            echo "  Updating reference: $lib_path -> @executable_path/lib/$lib_name"
+            install_name_tool -change "$lib_path" "@executable_path/lib/$lib_name" "$binary_path"
         fi
     done
     
